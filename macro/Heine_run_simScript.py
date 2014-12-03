@@ -1,6 +1,6 @@
 #!/usr/bin/env python 
 #
-#  This script is used for testing Genie implementation
+#   This script is used for testing Genie implementation
 #
 import ROOT,os,sys,getopt,time
 import shipunit as u
