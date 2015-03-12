@@ -1,5 +1,8 @@
-import os, subprocess,ROOT
+import os, subprocess,ROOT,time,getpass,multiprocessing
 import rootUtils as ut
+ncores = min(multiprocessing.cpu_count(),9)
+user   = getpass.getuser()
+# support for eos, assume: eosmount $HOME/eos
 
 h = {}
 
@@ -24,14 +27,8 @@ def fitSingleGauss(x,ba=None,be=None):
        myGauss.SetParName(3,'bckgr')
     h[x].Fit(myGauss,'','',ba,be) 
 
-prefix = 'muon58'
-if len(os.sys.argv)>1 : 
- prefix = os.sys.argv[1]
- if prefix.find('muon')<0:prefix='muon'+prefix
- print prefix
-
-cmd     = os.environ["FAIRSHIP"]+"/macro/genfitShip.py"  
-cmdAna  = os.environ["FAIRSHIP"]+"/macro/ShipAna.py"  
+cmd     = os.environ["FAIRSHIP"]+"/macro/ShipReco.py"  
+cmdAna  = os.environ["FAIRSHIP"]+"/macro/ShipAna.py"
 def execute( ncpu = 4 ):
   cpus = {}
   log  = {}
@@ -54,45 +51,106 @@ def execute( ncpu = 4 ):
         if  not f.find("geofile_full")<0:
           inputfile = f.replace("geofile_full","ship")
           log[k]  = open("logRec",'w')
-          cpus[k] = subprocess.Popen(["python",cmd,"-f "+inputfile], stdout=log[k],)
+          cpus[k] = subprocess.Popen(["python",cmd,"-n 9999999 -f "+inputfile], stdout=log[k],)
           k+=1
           os.chdir('../')
           break
   return cpus,log
 
-def executeSimple(prefixes):
- for p in prefixes:
-  prefix = str(p) 
-  if prefix.find('muon')<0:prefix='muon'+prefix
-  jobs = []
-  for x in os.listdir('.'):
+def getJobs(prefix):
+ jobs = []
+ for x in os.listdir('.'):
     if not x.find(prefix)<0: 
        if os.path.isdir(x) : 
          jobs.append(x)
+ return jobs 
+def checkRunningProcesses():
+ processoutput = os.popen("ps -u "+user).read()
+ nproc = 0
+ for x in  processoutput.split('\n'):
+    if not x.find('python')<0 and x.find('defunct')<0 : 
+      nproc+=1
+ return nproc
+def killAll():
+ processoutput = os.popen("ps -u "+user).read()
+ for x in  processoutput.split('\n'):
+    if not x.find('python')<0:
+       pid = int(x[:5])
+       print 'kill '+str(pid)
+       os.system('kill '+str(pid))
+def executeSimple(prefixes,reset=False):
+ proc = {}
+ for prefix in prefixes:
+  jobs = getJobs(prefix)
   for x in jobs:
       print "change to directory ",x   
       os.chdir('./'+x) 
+      geofile = None
       for f in os.listdir('.'):
-        if  not f.find("geofile_full")<0:
-          inputfile = f.replace("geofile_full","ship")
-          log  = open("logRec",'w')
-          print 'launch',x
-          process = subprocess.Popen(["python",cmd,"-f "+inputfile], stdout=log)
-          process.wait()
-          print 'finished ',process.returncode
-          log.close() 
-          log  = open("logAna",'w')
-          process = subprocess.Popen(["python",cmdAna,"-f "+inputfile.replace('.root','_rec.root')], stdout=log)
-          process.wait()          
-          print 'finished ',process.returncode
-          log.close() 
-          os.chdir('../')
+        if not f.find("geofile_full")<0:
+          geofile = f
           break
-
-# 591-599 test with replacing tungsten core with iron, 6m height, display
-# 601-609 replacing tungsten core with iron, 6m height, Yandex data, display
-# 610-619 replacing tungsten core with iron, 10m height, display
-# 620-629 replacing tungsten core with iron, 10m height, Yandex data, display
+      if not geofile:
+         print "ERROR: no geofile found"
+         continue
+      else:  
+          inputfile = geofile.replace("geofile_full","ship")
+          nproc = 100
+          while nproc > ncores : 
+            nproc = checkRunningProcesses()
+            if nproc > ncores: 
+               print 'wait a minute'
+               time.sleep(100)
+          print 'launch reco',x
+          proc[x] = 1
+          os.system("python "+cmd+" -n 9999999 -f "+inputfile + " >> logRec &")
+          os.chdir('../')
+ nJobs = len(proc)
+ while nJobs > 0:
+  procAna = proc.keys()
+  nJobs = len(proc)
+  procAna.sort()
+  print 'debug ',nJobs
+  for p in procAna: 
+    os.chdir('./'+p) 
+    nproc = 100
+    while nproc > ncores : 
+      nproc = checkRunningProcesses()
+      if nproc > ncores: 
+       print 'wait a minute'
+       time.sleep(100)
+    log = open('logRec')
+    completed = False
+    rl = log.readlines()
+    log.close()       
+    if "finishing" in rl[len(rl)-1] : completed = True
+    if completed:
+     print 'analyze ',p,nproc
+     os.system("python "+cmdAna+" -n 9999999 -f "+inputfile.replace('.root','_rec.root')+ " >> logAna &")
+     rc = proc.pop(p) 
+    else:
+     print 'Rec job not finished yet',p
+     time.sleep(100)
+    os.chdir('../')
+     
+def executeAna(prefixes):
+ cpus = {}
+ log  = {} 
+ for prefix in prefixes:
+  jobs = getJobs(prefix)
+  for x in jobs:
+    print "change to directory ",x   
+    os.chdir('./'+x) 
+    for f in os.listdir('.'):
+      if  not f.find("geofile_full")<0:
+        inputfile = f.replace("geofile_full","ship")
+        log[x] = open("logAna",'w')
+        process = subprocess.Popen(["python",cmdAna,"-n 9999999", "-f "+inputfile.replace('.root','_rec.root')], stdout=log[x])
+        process.wait()          
+        print 'finished ',process.returncode
+        log[x].close() 
+        os.chdir('../')
+        break
 
 h={} 
 def mergeHistosMakePlots(p):
@@ -101,7 +159,6 @@ def mergeHistosMakePlots(p):
  hlist = ''
  for p in pl:
    prefix = str(p) 
-   if prefix.find('muon')<0:prefix='muon'+prefix
    for x in os.listdir('.'):
     if not x.find(prefix)<0: 
        if os.path.isdir(x) : 
@@ -145,20 +202,87 @@ def mergeHistosMakePlots(p):
    h['IP0'].Draw()
    cv = h['fitresults2'].cd(3)
    h['HNL'].Draw()
-   fitSingleGauss('HNL')
+   fitSingleGauss('HNL',0.,2.)
    cv = h['fitresults2'].cd(4)
    h['IP0/mass'].Draw('box')
    h['fitresults2'].Print('fitresults2.gif')
    h['strawanalysis'].Print('strawanalysis.gif')
    print 'finished making plots'
 
+def mergeNtuples(prefixes):
+ for prefix in prefixes:
+  jobs = getJobs(prefix)
+  haddCommand = ''
+  for x in jobs:
+      for f in os.listdir(x):
+        if  not f.find("geofile_full")<0:
+          inputfile = (f.replace("geofile_full","ship")).replace('.root','_rec.root')
+          haddCommand+= ' '+ x + '/' + inputfile    
+          break
+  cmd = 'hadd -f '+inputfile.replace('.root','_'+prefix+'.root') + haddCommand  
+  os.system(cmd)
+def checkProd(prefixes):
+ for prefix in prefixes:
+  jobs = getJobs(prefix)
+  for x in jobs:
+    try:    log = open( x+'/log')
+    except: 
+      print 'no log file for ',x 
+      continue
+    rl = log.readlines()
+    log.close()       
+    if "Real time" in rl[len(rl)-1] : 
+      print 'simulation step OK ',x
+    else:  
+      print "simulation failed ",x 
+      continue
+    try:    log = open( x+'/logRec')
+    except: 
+      print 'no logRec file for ',x 
+      continue
+    rl = log.readlines()
+    log.close()       
+    if "finishing" in rl[len(rl)-1] : 
+      print 'reconstruction step OK ',x
+    else:  
+      print "reconstruction failed ",x 
+      continue
+    try:    log = open( x+'/logAna')
+    except: 
+      print 'no logAna file for ',x 
+      continue
+    rl = log.readlines()
+    log.close()       
+    if "finished" in rl[len(rl)-1] : 
+      print 'analysis step OK ',x
+    else:  
+      print "analysis failed ",x 
+      continue    
+     
 
-
-
-# cpus,log = execute()
-if not len(os.sys.argv)>1: executeSimple([59,60,61,62])
-else : 
- pl=[]
- for p in os.sys.argv[1].split(','):
-   pl.append(p) 
+def execute():
+ executeSimple(pl,reset=True)
  mergeHistosMakePlots(pl)
+ mergeNtuples(pl)
+def removeIntermediateFiles(prefixes):
+ for prefix in prefixes:
+  jobs = getJobs(prefix)
+  for x in jobs:
+      for f in os.listdir(x):
+        if  not f.find("geofile_full")<0:
+          inputfile = (f.replace("geofile_full","ship")).replace('.root','_rec.root')
+          os.system('rm '+x+'/' + inputfile ) 
+
+pl=[]
+for p in os.sys.argv[1].split(','):
+   pref = 'muon'
+   if not os.path.abspath('.').find('neutrino')<0: pref='neutrino'
+   if not os.path.abspath('.').find('dis')<0: pref='dis'
+   pl.append(pref+p) 
+print " execute()  input comma separated production nr, performs Simple/mergeHistos/mergeNtuples "
+print " executeSimple(pl,reset=True) "
+print " checkProd(pl)"
+print " executeAna(pl) "
+print " mergeNtuples(pl) "
+print " removeIntermediateFiles(pl) only _rec "
+#61,611,612,613,614,615,616,62,621,622,623,624,625,626

@@ -851,13 +851,14 @@ void hcal::ConstructModule()
   gGeoManager->Node(nm1.Data(), 2, nm.Data(), 0.0, +fThicknessSteel/2.0-fModuleSize/2.0, 0.0, 0, kTRUE, buf, 0);
 
   fModuleLength=moduleth;
+  fModule=modulev;
 }
 // -------------------------------------------------------------------------
 
 // -----   Private method ConstructModuleSimple-----------------------------    
 void hcal::ConstructModuleSimple()
 {
-  if (fModule=NULL) return;
+  if (fModule!=NULL) return;
 
   ConstructTileSimple(0);
   ConstructTileSimple(1);
@@ -894,6 +895,7 @@ void hcal::ConstructModuleSimple()
   }
   
   fModuleLength=moduleth;
+  fModule=modulev;
 }
 // -------------------------------------------------------------------------
 
@@ -1130,7 +1132,6 @@ void hcal::ConstructTileSimple(Int_t material)
     default: Error("ConstructTile", "Can't construct a tile of type %d.", material);
   }
 
-  nm;
   tile=new TGeoBBox(fModuleSize/2.0, fModuleSize/2.0, thickness);
   tilev=new TGeoVolume(nm, tile, gGeoManager->GetMedium(medium));
   /** Adding edging to scintillator **/
